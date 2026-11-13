@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>그늘길 – 체감온도 경로 추천</title>
+<style>
+  :root {
+    --bg: #f6f5f1; --card: #fff; --ink: #1f2328; --muted: #6b7076; --line: #e3e1da;
+    --accent: #2f6f4f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+         background: var(--bg); color: var(--ink); }
+  header { padding: 20px 24px 8px; }
+  header h1 { margin: 0; font-size: 22px; }
+  header p { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+  main { display: grid; grid-template-columns: 260px 1fr 320px; gap: 16px; padding: 16px 24px 32px; }
+  @media (max-width: 1050px) { main { grid-template-columns: 1fr; } }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .card h2 { margin: 0 0 12px; font-size: 15px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 4px; }
+  label b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  input[type=number], select { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .sun { margin-top: 16px; padding: 10px; border-radius: 8px; background: #fbf7e9; font-size: 13px; line-height: 1.6; }
+  #map { width: 100%; height: auto; display: block; border-radius: 8px; background: #ecebe5; }
+  .legend { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-top: 10px; flex-wrap: wrap; }
+  .grad { width: 160px; height: 10px; border-radius: 5px;
+          background: linear-gradient(90deg, hsl(240 75% 50%), hsl(120 65% 42%), hsl(0 75% 50%)); }
+  .route { border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-bottom: 10px; cursor: pointer; transition: .15s; }
+  .route:hover { border-color: #b9b6ab; }
+  .route.active { border-color: var(--accent); box-shadow: 0 0 0 2px #2f6f4f33; }
+  .route .top { display: flex; align-items: center; gap: 8px; }
+  .rank { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 13px;
+          background: #eee; flex: none; }
+  .route.r1 .rank { background: var(--accent); color: #fff; }
+  .route .name { font-weight: 600; }
+  .route .desc { font-size: 12px; color: var(--muted); margin: 2px 0 8px 34px; }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 8px; font-size: 12px; margin-left: 34px; }
+  .stats span { color: var(--muted); display: block; }
+  .stats b { font-variant-numeric: tabular-nums; }
+  .note { font-size: 12px; color: var(--muted); line-height: 1.6; margin-top: 8px; }
+  code { background: #f0efe9; padding: 1px 4px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🌳 그늘길</h1>
+  <p>시각별 그림자를 계산해, 체감온도가 25°C에 가장 가까운 경로를 추천합니다 (더미 지도)</p>
+</header>
+
+<main>
+  <!-- 왼쪽: 입력 -->
+  <section class="card">
+    <h2>조건</h2>
+    <label>출발 시각 <b id="hourLabel"></b></label>
+    <input id="hour" type="range" min="5" max="20" step="0.25" value="14">
+
+    <div class="row2">
+      <div><label>월</label>
+        <select id="month"></select></div>
+      <div><label>일</label>
+        <input id="day" type="number" min="1" max="28" value="20"></div>
+    </div>
+
+    <div class="row2">
+      <div><label>최고기온</label><input id="tmax" type="number" value="32"></div>
+      <div><label>최저기온</label><input id="tmin" type="number" value="24"></div>
+    </div>
+
+    <label>구름량 <b id="cloudLabel"></b></label>
+    <input id="cloud" type="range" min="0" max="1" step="0.05" value="0.1">
+
+    <label>거리 패널티 λ <b id="lamLabel"></b></label>
+    <input id="lam" type="range" min="0" max="200" step="5" value="20">
+
+    <div class="sun" id="sun"></div>
+  </section>
+
+  <!-- 가운데: 지도 -->
+  <section class="card">
+    <h2>지도 · 구간별 체감온도</h2>
+    <svg id="map" viewBox="0 0 400 200"></svg>
+    <div class="legend">
+      <span>15°C</span><div class="grad"></div><span>35°C</span>
+      <span style="margin-left:12px">■ 건물 &nbsp; ▒ 그림자 &nbsp; ● 가로수</span>
+    </div>
+  </section>
+
+  <!-- 오른쪽: 결과 -->
+  <section class="card">
+    <h2>추천 순위</h2>
+    <div id="routes"></div>
+    <p class="note">
+      비용 = Σ 시간(분) × (체감온도 − 25)² + λ × 소요시간(분)<br>
+      비교용 <code>ΣL·T</code>는 처음 기획서의 공식 값입니다. 경로가 길수록 커져서 그대로는 비교가 어렵습니다.
+    </p>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const monthSel = $("month");
+for (let m = 1; m <= 12; m++) monthSel.add(new Option(m + "월", m, false, m === 7));
+
+let data = null, selected = null, timer = null;
+
+const tempColor = T => `hsl(${Math.max(0, Math.min(240, 120 - (T - 25) * 12))} 70% 45%)`;
+const fmtHour = h => `${String(Math.floor(h)).padStart(2, "0")}:${String(Math.round((h % 1) * 60)).padStart(2, "0")}`;
+
+function params() {
+  return new URLSearchParams({
+    hour: $("hour").value, month: monthSel.value, day: $("day").value,
+    tmax: $("tmax").value, tmin: $("tmin").value, cloud: $("cloud").value, lam: $("lam").value,
+  });
+}
+
+async function load() {
+  $("hourLabel").textContent = fmtHour(+$("hour").value);
+  $("cloudLabel").textContent = Math.round($("cloud").value * 100) + "%";
+  $("lamLabel").textContent = $("lam").value;
+  const res = await fetch("/api/simulate?" + params());   // ← 백엔드 호출
+  data = await res.json();
+  if (!selected || !data.routes.find(r => r.id === selected)) selected = data.routes[0].id;
+  render();
+}
+
+function render() {
+  const { map, shadows, sun, routes } = data;
+  const Y = y => map.bounds.ymax - y;     // 지도 좌표(북쪽이 위) -> SVG 좌표
+  let s = "";
+
+  // 공원
+  s += `<polygon points="${map.park.map(([x, y]) => `${x},${Y(y)}`).join(" ")}" fill="#d7e8cf"/>`;
+  // 그림자
+  for (const poly of shadows.buildings)
+    s += `<polygon points="${poly.map(([x, y]) => `${x},${Y(y)}`).join(" ")}" fill="#3a3f4a" fill-opacity=".22"/>`;
+  for (const c of shadows.trees)
+    s += `<circle cx="${c.x}" cy="${Y(c.y)}" r="${c.r}" fill="#3a3f4a" fill-opacity=".18"/>`;
+  if (shadows.night) s += `<rect width="400" height="200" fill="#1b2340" fill-opacity=".35"/>`;
+  // 건물 (높이에 따라 진하게)
+  for (const b of map.buildings) {
+    const l = 82 - b.h;
+    s += `<rect x="${b.x}" y="${Y(b.y + b.d)}" width="${b.w}" height="${b.d}" rx="1.5" fill="hsl(30 6% ${l}%)"/>`;
+    s += `<text x="${b.x + b.w / 2}" y="${Y(b.y + b.d / 2) + 2.5}" font-size="7" text-anchor="middle" fill="#fff">${b.h}m</text>`;
+  }
+  // 경로 (선택된 경로가 맨 위)
+  const order = [...routes].sort((a, b) => (a.id === selected) - (b.id === selected));
+  for (const r of order) {
+    const on = r.id === selected;
+    for (const g of r.segments)
+      s += `<line x1="${g.a[0]}" y1="${Y(g.a[1])}" x2="${g.b[0]}" y2="${Y(g.b[1])}"
+              stroke="${tempColor(g.T)}" stroke-width="${on ? 4.5 : 2.5}" stroke-opacity="${on ? 1 : .35}"
+              stroke-linecap="round"><title>${g.T}°C · 그늘 ${Math.round(g.shade * 100)}%</title></line>`;
+  }
+  // 가로수
+  for (const t of map.trees)
+    s += `<circle cx="${t.x}" cy="${Y(t.y)}" r="1.6" fill="#3f7d3a"/>`;
+  // 출발/도착
+  s += `<circle cx="${map.start[0]}" cy="${Y(map.start[1])}" r="5" fill="#1f2328"/>
+        <text x="${map.start[0]}" y="${Y(map.start[1]) + 2.5}" font-size="7" fill="#fff" text-anchor="middle">A</text>
+        <circle cx="${map.goal[0]}" cy="${Y(map.goal[1])}" r="5" fill="#1f2328"/>
+        <text x="${map.goal[0]}" y="${Y(map.goal[1]) + 2.5}" font-size="7" fill="#fff" text-anchor="middle">B</text>`;
+  // 방위
+  s += `<text x="392" y="12" font-size="9" text-anchor="middle" fill="#6b7076">N↑</text>`;
+  $("map").innerHTML = s;
+
+  // 태양 정보
+  const dirs = ["북", "북동", "동", "남동", "남", "남서", "서", "북서"];
+  $("sun").innerHTML = shadows.night
+    ? `🌙 해가 진 시간입니다 (고도 ${sun.alt}°)<br>기온 ${data.air_temp}°C`
+    : `☀️ 태양 고도 <b>${sun.alt}°</b>, 방향 <b>${dirs[Math.round(sun.az / 45) % 8]}</b> (${sun.az}°)<br>
+       기온 <b>${data.air_temp}°C</b> · 그림자는 ${dirs[Math.round(((sun.az + 180) % 360) / 45) % 8]}쪽으로`;
+
+  // 순위 카드
+  $("routes").innerHTML = routes.map(r => `
+    <div class="route r${r.rank} ${r.id === selected ? "active" : ""}" data-id="${r.id}">
+      <div class="top"><div class="rank">${r.rank}</div><div class="name">${r.name}</div></div>
+      <div class="desc">${r.desc}</div>
+      <div class="stats">
+        <div><span>거리</span><b>${r.length}m</b></div>
+        <div><span>시간</span><b>${r.minutes}분</b></div>
+        <div><span>그늘</span><b>${Math.round(r.shade_ratio * 100)}%</b></div>
+        <div><span>평균 체감</span><b style="color:${tempColor(r.mean_T)}">${r.mean_T}°</b></div>
+        <div><span>최고 체감</span><b style="color:${tempColor(r.max_T)}">${r.max_T}°</b></div>
+        <div><span>비용</span><b>${r.cost}</b></div>
+        <div style="grid-column: span 3"><span>비교: ΣL·T = ${r.naive_sum.toLocaleString()}</span></div>
+      </div>
+    </div>`).join("");
+  document.querySelectorAll(".route").forEach(el =>
+    el.onclick = () => { selected = el.dataset.id; render(); });
+}
+
+document.querySelectorAll("input, select").forEach(el =>
+  el.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(load, 120); }));
+load();
+</script>
+</body>
+</html>
